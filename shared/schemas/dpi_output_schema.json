@@ -1,0 +1,7 @@
+{
+  "flow_id": "string",
+  "signature_detected": "boolean",
+  "attack_type": "string",
+  "severity": "low | medium | high",
+  "timestamp": "string"
+}

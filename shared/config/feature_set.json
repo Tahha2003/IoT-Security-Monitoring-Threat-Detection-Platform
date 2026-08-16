@@ -1,0 +1,123 @@
+{
+  "version": "1.0",
+  "locked": true,
+  "description": "Unified locked feature contract for IoT Device Security Monitoring and Threat Detection Platform. All datasets, Zeek flow parsers, ML training, live inference, DPI escalation, and retraining must follow this schema without modification unless roadmap version changes officially.",
+  "target_column": "label",
+  "features": [
+    {
+      "name": "duration",
+      "type": "float",
+      "source": "zeek/dataset",
+      "description": "Total flow duration in seconds"
+    },
+    {
+      "name": "packet_count",
+      "type": "integer",
+      "source": "zeek/dataset",
+      "description": "Total packets observed in the flow"
+    },
+    {
+      "name": "byte_count",
+      "type": "integer",
+      "source": "zeek/dataset",
+      "description": "Total bytes transferred in the flow"
+    },
+    {
+      "name": "avg_pkt_size",
+      "type": "float",
+      "source": "derived",
+      "description": "Average packet size = byte_count / packet_count"
+    },
+    {
+      "name": "flow_rate",
+      "type": "float",
+      "source": "derived",
+      "description": "Flow throughput = byte_count / duration"
+    },
+    {
+      "name": "dst_port",
+      "type": "integer",
+      "source": "zeek/dataset",
+      "description": "Destination port number"
+    },
+    {
+      "name": "protocol",
+      "type": "string",
+      "source": "zeek/dataset",
+      "description": "Transport or application protocol observed"
+    },
+    {
+      "name": "conn_state",
+      "type": "string",
+      "source": "zeek/dataset",
+      "description": "Connection state such as S0, SF, REJ"
+    },
+    {
+      "name": "dns_query_count",
+      "type": "integer",
+      "source": "zeek/dataset/derived",
+      "description": "Number of DNS queries observed for the flow/session"
+    },
+    {
+      "name": "label",
+      "type": "string",
+      "source": "dataset/manual/live",
+      "description": "Ground truth or predicted label such as benign, attack, anomaly"
+    }
+  ],
+  "encoding_rules": {
+    "protocol": {
+      "encoding_type": "label_encoding",
+      "example_mapping": {
+        "tcp": 0,
+        "udp": 1,
+        "icmp": 2,
+        "dns": 3,
+        "http": 4,
+        "https": 5,
+        "other": 99
+      }
+    },
+    "conn_state": {
+      "encoding_type": "label_encoding",
+      "example_mapping": {
+        "S0": 0,
+        "S1": 1,
+        "SF": 2,
+        "REJ": 3,
+        "RSTO": 4,
+        "RSTR": 5,
+        "SH": 6,
+        "OTH": 99
+      }
+    },
+    "label": {
+      "encoding_type": "target_mapping",
+      "example_mapping": {
+        "benign": 0,
+        "attack": 1,
+        "anomaly": 1
+      }
+    }
+  },
+  "derived_feature_rules": {
+    "avg_pkt_size": "byte_count / packet_count if packet_count > 0 else 0",
+    "flow_rate": "byte_count / duration if duration > 0 else 0"
+  },
+  "validation_rules": {
+    "duration_min": 0,
+    "packet_count_min": 0,
+    "byte_count_min": 0,
+    "avg_pkt_size_min": 0,
+    "flow_rate_min": 0,
+    "dst_port_min": 0,
+    "dst_port_max": 65535,
+    "dns_query_count_min": 0
+  },
+  "notes": [
+    "This file is the single source of truth for feature alignment.",
+    "No service is allowed to invent new training features without updating roadmap version officially.",
+    "All datasets must be transformed into this exact schema before training.",
+    "All live Zeek flow outputs must be transformed into this exact schema before inference."
+  ]
+}

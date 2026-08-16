@@ -1,0 +1,13 @@
+{
+  "timestamp": "string",
+  "src_ip": "string",
+  "src_port": "number",
+  "dst_ip": "string",
+  "dst_port": "number",
+  "protocol": "string",
+  "duration": "number",
+  "service": "string",
+  "src_bytes": "number",
+  "dst_bytes": "number",
+  "conn_state": "string"
+}

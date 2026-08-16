@@ -1,0 +1,88 @@
+# -----------------------------
+# 🔐 ENV & SECRETS
+# -----------------------------
+.env
+.env.*
+shared/config/env.example
+
+# -----------------------------
+# 🐍 PYTHON
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# -----------------------------
+# 📦 PYTHON BUILD
+# -----------------------------
+build/
+dist/
+*.egg-info/
+
+# -----------------------------
+# 📊 ML MODELS & DATASETS
+# -----------------------------
+ml/datasets/raw/*
+ml/datasets/processed/*
+ml/datasets/feedback/*
+ml/models/*
+
+# Keep folder structure
+!ml/datasets/raw/.gitkeep
+!ml/datasets/processed/.gitkeep
+!ml/datasets/feedback/.gitkeep
+!ml/models/.gitkeep
+
+# -----------------------------
+# 📁 LOG FILES (ALL SERVICES)
+# -----------------------------
+logs/
+services/*/logs/
+*.log
+
+# -----------------------------
+# 📈 MONITORING
+# -----------------------------
+infrastructure/monitoring/grafana/*
+!infrastructure/monitoring/grafana/.gitkeep
+
+# -----------------------------
+# 🌐 NODE / DASHBOARD
+# -----------------------------
+node_modules/
+dist/
+build/
+.cache/
+
+# -----------------------------
+# 🧪 TEST OUTPUT
+# -----------------------------
+coverage/
+.pytest_cache/
+
+# -----------------------------
+# 🧠 IDE / EDITOR
+# -----------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# -----------------------------
+# 🐳 DOCKER (FUTURE)
+# -----------------------------
+*.env.docker
+
+# -----------------------------
+# 🔒 SYSTEM FILES
+# -----------------------------
+Thumbs.db

@@ -1,0 +1,7 @@
+{
+  "flow_id": "string",
+  "anomaly_score": "number",
+  "is_anomaly": "boolean",
+  "risk_level": "low | medium | high",
+  "timestamp": "string"
+}

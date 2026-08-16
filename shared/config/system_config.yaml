@@ -1,0 +1,31 @@
+system:
+  mode: "development"
+  log_level: "INFO"
+pipeline:
+  buffer_size: 1000
+  retry_attempts: 3
+  timeout_seconds: 5
+services:
+  ai_service_url: "http://localhost:8001"
+  dpi_service_url: "http://localhost:8002"
+  siem_service_url: "http://localhost:8003"
+  api_service_url: "http://localhost:8000"
+capture:
+  interface: "eth0"
+  bpf_filter: "ip"
+network:
+  monitored_ips:
+    - "192.168.2.101"   # backend (this machine)
+    - "192.168.50.10"   # IP Camera
+    - "192.168.50.40"   # BYOD Mobile
+  iot_devices:
+    - "192.168.50.10"   # IP Camera
+    - "192.168.50.40"   # BYOD Mobile
+  camera_ip: "192.168.50.10"
+  backend_ip: "192.168.2.101"
+database:
+  host: "localhost"
+  port: 5432
+  name: "fyp_security"
+  user: "postgres"
+  # password: set via DB_PASS environment variable — never commit credentials

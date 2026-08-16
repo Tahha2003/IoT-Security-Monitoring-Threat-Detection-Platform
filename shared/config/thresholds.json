@@ -1,0 +1,6 @@
+{
+  "anomaly_threshold": 0.65,
+  "high_risk_threshold": 0.85,
+  "dpi_trigger_threshold": 0.7,
+  "false_positive_feedback_weight": 0.3
+}

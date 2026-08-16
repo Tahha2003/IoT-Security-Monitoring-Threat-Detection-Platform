@@ -1,0 +1,10 @@
+{
+  "alert_id": "string",
+  "flow_id": "string",
+  "source_ip": "string",
+  "destination_ip": "string",
+  "threat_type": "string",
+  "severity": "low | medium | high",
+  "status": "new | investigating | resolved",
+  "timestamp": "string"
+}

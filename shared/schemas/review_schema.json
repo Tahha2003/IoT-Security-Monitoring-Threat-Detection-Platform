@@ -1,0 +1,6 @@
+{
+  "alert_id": "string",
+  "analyst_decision": "true_positive | false_positive",
+  "comments": "string",
+  "reviewed_at": "string"
+}

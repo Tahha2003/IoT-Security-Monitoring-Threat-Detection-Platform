@@ -1,0 +1,19 @@
+# services/capture-service/configs/capture_settings.yaml
+
+backend:
+  host: 0.0.0.0         # Listen on all interfaces for Phase 2 Pi stream
+  port: 9000            # TCP port matching Pi's start_capture.sh
+  buffer_size: 4096     # Bytes per read (matches tcpdump -B 4096)
+
+# Optional placeholders for Phase 3 upgrades
+queue:
+  enabled: false        # Phase 2: queue not used
+  max_size: 10000       # Max items in memory queue
+
+capture:
+  interface: eth0       # Pi interface (for reference)
+  bpf_filter: "(tcp or udp) and not arp and not broadcast and not multicast"
+
+logging:
+  phase2_log_file: ../logs/phase2_listener.log
+  log_level: INFO       # INFO / DEBUG for future extension

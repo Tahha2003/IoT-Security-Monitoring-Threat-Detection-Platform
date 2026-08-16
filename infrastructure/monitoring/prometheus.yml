@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Pipeline metrics (queue depth, inference latency, alerts)
+  - job_name: 'iot_ids_pipeline'
+    static_configs:
+      - targets: ['localhost:9091']
+
+  # System metrics — CPU, RAM, disk (node_exporter — Phase 8 GAP 2 FIX)
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets: ['localhost:9100']
