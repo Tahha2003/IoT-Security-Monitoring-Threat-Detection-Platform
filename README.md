@@ -8,7 +8,7 @@
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](LICENSE)
 
 **Final Year Project — BSc Computer Science / Cybersecurity**
 
@@ -701,7 +701,25 @@ This project is an academic final year project and is open for learning and exte
 
 ## 📜 License
 
-Distributed under the MIT License. See `LICENSE` for more information.
+Distributed under the **Apache License 2.0**. See `LICENSE` for the full text.
+
+```
+Copyright 2026 IoT Threat Detection & Security Monitoring Platform
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+```
+
+Key permissions under Apache 2.0:
+- ✅ Commercial use
+- ✅ Modification and distribution
+- ✅ Patent use
+- ✅ Private use
+- ⚠️ Must include original license and copyright notice
+- ⚠️ State changes made to the code
 
 ---
 
