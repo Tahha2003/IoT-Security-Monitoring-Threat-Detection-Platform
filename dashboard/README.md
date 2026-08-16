@@ -77,6 +77,50 @@ System Control is positioned at the top (after Stats Bar) so the user starts the
 
 ---
 
+## Screenshots
+
+### Stats Bar + System Control
+> Summary counters (Total / CRITICAL / HIGH / MEDIUM / LOW), pipeline status pills, NIC picker, log viewer, and CRITICAL THREAT toast notification.
+
+![Stats Bar and System Control](../docs/dashboard/1.png)
+
+---
+
+### System Control — Startup Log (Pipeline LIVE)
+> Pipeline running with 1,150 alerts recorded. Startup log shows NIC (`wlxe009bf6913de`), log file paths, and the `export ZEEK_INTERFACE` instruction.
+
+![System Control Startup Log](../docs/dashboard/2.png)
+
+---
+
+### Live Network Topology + Pipeline Flow
+> Interactive topology showing Capture Zone (Raspberry Pi → Switch), Detection Zone (Backend PC → IDS Pipeline → WiFi Router), and IoT Devices (IP Camera — highlighted red under attack, BYOD Mobile). The Pipeline Flow bar at the bottom shows all 7 threads: T1 Packet Listener → T2 Zeek Feeder → T3 Zeek Parser → T4 ML Inference → T5 DPI Worker → T6 SIEM Writer → T7 Metrics.
+
+![Live Network Topology](../docs/dashboard/3.png)
+
+---
+
+### Live Alert Feed + Anomaly Gauge + System Health + Severity Distribution
+> Real-time alert feed with severity badges, source IPs, attack types, and risk scores. Anomaly gauge at 68% (HIGH). System Health showing CPU 23.8%, all services RUNNING. Connected Devices panel with IP Camera (366 alerts, 84% risk) and BYOD Mobile (128 alerts, 76% risk).
+
+![Live Alert Feed and Anomaly Gauge](../docs/dashboard/4.png)
+
+---
+
+### Attack Timeline + Top Attacker IPs + SOAR Panel
+> ECG/heartbeat-style attack timeline with severity-colored spikes. Top Attacker IPs leaderboard. SOAR panel showing all 4 playbooks (Block Attacker, Camera Defense, Quarantine Device, Scan Detection) with runtime toggle switches.
+
+![Attack Timeline and SOAR Panel](../docs/dashboard/5.png)
+
+---
+
+### SOAR Panel — All Playbooks Active + Execution Log
+> All 4 playbooks enabled (ACTIVE): Block Attacker, Camera Defense, Quarantine Device, Scan Detection. Playbook Execution Log panel visible at the bottom.
+
+![SOAR Playbooks Active](../docs/dashboard/6.png)
+
+---
+
 ## Key Components
 
 ### `SystemControl.js`
