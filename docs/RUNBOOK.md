@@ -1,46 +1,68 @@
 # IoT IDS — Complete Operations Runbook
-**Project:** IoT Threat Detection System (FYP Phase 7)  
-**Author:** Auto-generated  
-**Last Updated:** May 2026
+
+**Project:** IoT Threat Detection & Security Monitoring Platform  
+**Last Updated:** August 2026
+
+> This is the single authoritative guide for setting up, running, and troubleshooting the system.
+> Always use `bash infrastructure/scripts/start_pipeline.sh` to start — never launch services individually.
 
 ---
 
-## Network Topology
+## Network Topology (Real Deployment)
 
 ```
-Internet
-    │
-    └── PC (eth0: 192.168.10.120 — Backend)
-            │
-        Switch (SPAN configured)
-        ├── GI01 — Pi (DESTINATION/SPAN port) — eth0: 192.168.10.150
-        ├── GI03 — Backend (192.168.10.120) — SOURCE port
-        ├── GI05 — Router (192.168.10.1) — SOURCE port
-        │           └── WiFi AP
-        │               ├── IP Camera  (192.168.10.101)
-        │               └── BYOD Phone (192.168.10.102)
-        └── GI11 — Kali Linux (192.168.10.130) — SOURCE port
+                  WiFi Router
+                  192.168.50.0/24 (wireless)
+                       │
+           ┌───────────┼───────────┐
+           │                       │
+    WiFi Camera              BYOD Mobile
+    192.168.50.10            192.168.50.40
+    (IoT Device)             (IoT Device)
 
-Pi WiFi (wlan0: 192.168.50.1) — IOT-LAB AP
-    └── PC connects via IOT-LAB to SSH into Pi
+      Managed Switch (SPAN configured)
+      ├── Port A ── Raspberry Pi     192.168.2.106   ← SPAN destination
+      ├── Port B ── Backend PC       192.168.2.101   ← source (mirrored)
+      ├── Port C ── WiFi Router      (uplink)         ← source (mirrored)
+      └── Port D ── Kali Linux       192.168.2.x     ← testbed operator
+
+IOT-LAB WiFi (out-of-band management network)
+      Backend PC:  wlxe009bf6913de   192.168.50.21  (check with: ip addr show wlxe009bf6913de)
+      Pi wlan0:    192.168.50.1                      ← SSH access point
 ```
+
+> **Important:** IPs may differ on your specific setup. The single source of truth is
+> `shared/config/system_config.yaml`. Update it before starting the system.
+
+### Device IP Map
+
+| IP | Device | Role |
+|----|--------|------|
+| 192.168.50.10 | WiFi Camera | Monitored IoT Device (wireless) |
+| 192.168.50.40 | BYOD Mobile | Monitored IoT Device (wireless) |
+| 192.168.2.101 | Backend PC | Detection engine, ML, API, dashboard |
+| 192.168.2.106 | Raspberry Pi (eth0) | SPAN destination, PCAP capture agent |
+| 192.168.50.1 | Raspberry Pi (wlan0) | IOT-LAB AP — SSH access |
+| 192.168.50.21 | Backend PC (wlxe009bf6913de) | IOT-LAB IP — used as BACKEND_IP in Pi script |
+| Kali IP | Kali Linux | Testbed operator / attack simulation |
 
 ---
 
 ## Prerequisites Checklist
 
-Before starting, verify these are installed:
-
 ```bash
-# Python
-python3 --version          # 3.8+
+# Python 3.10+
+python3 --version
 
-# Node.js
-node --version             # 16+
+# Node.js 18+ and npm
+node --version
 npm --version
 
-# Zeek
+# Zeek (pcap-replay mode)
 /opt/zeek/bin/zeek --version
+
+# Suricata
+suricata --version
 
 # PostgreSQL
 sudo systemctl status postgresql
@@ -48,20 +70,146 @@ sudo systemctl status postgresql
 # UFW
 sudo ufw status
 
-# Socat (on Pi)
-# ssh pi@192.168.50.1 "socat -V"
+# socat (on Raspberry Pi — not backend)
+ssh pi@192.168.50.1 "socat -V"
 ```
 
 ---
 
 ## PART 1 — FIRST TIME SETUP
 
-### Step 1.1 — Train ML Models
+### Step 1.0 — Configure Device IPs
+
+Before anything else, update `shared/config/system_config.yaml` with your actual device IPs:
+
+```yaml
+network:
+  monitored_ips:
+    - "192.168.2.101"    # Backend PC
+    - "192.168.50.10"    # WiFi Camera
+    - "192.168.50.40"    # BYOD Mobile
+  iot_devices:
+    - "192.168.50.10"    # WiFi Camera
+    - "192.168.50.40"    # BYOD Mobile
+  camera_ip: "192.168.50.10"
+  backend_ip: "192.168.2.101"
+```
+
+Create `dashboard/.env`:
 
 ```bash
-cd ~/iot-threat-detection
+cat > dashboard/.env << 'EOF'
+REACT_APP_API_URL=http://192.168.2.101:8000
+REACT_APP_WS_URL=ws://192.168.2.101:8000/ws
+EOF
+```
 
-# Run dataset preparer first
+Find your actual backend NIC:
+
+```bash
+ip link show
+# Look for your wired interface: eth0, ens3, enp3s0, etc.
+ip addr show
+```
+
+---
+
+### Step 1.1 — Install System Dependencies
+
+```bash
+# Zeek
+sudo apt install zeek
+
+# Or from source (recommended for latest version)
+# See: https://zeek.org/get-zeek/
+
+# Add to PATH
+echo 'export PATH=/opt/zeek/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
+
+# Suricata
+sudo apt install suricata
+sudo suricata-update
+sudo suricata --build-info | grep "Features"
+
+# UFW
+sudo apt install ufw
+sudo ufw enable
+```
+
+---
+
+### Step 1.2 — Configure sudo Rules for Pipeline
+
+The pipeline needs passwordless sudo for UFW and iptables:
+
+```bash
+bash infrastructure/scripts/setup_sudo.sh
+```
+
+This creates a sudoers entry allowing the pipeline to run `ufw` and `iptables` without a password prompt.
+
+Verify:
+
+```bash
+sudo -n ufw status    # should not ask for password
+sudo -n iptables -L   # should not ask for password
+```
+
+---
+
+### Step 1.3 — Python Environment
+
+```bash
+# From project root
+python3 -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+# Verify key packages
+python3 -c "import fastapi, sklearn, psycopg2, scapy; print('OK')"
+```
+
+---
+
+### Step 1.4 — Set Up PostgreSQL Database
+
+```bash
+# Start PostgreSQL
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+
+# Create database
+sudo -u postgres psql -c "CREATE DATABASE fyp_security;" 2>/dev/null \
+    || echo "Already exists"
+
+# Apply schema (idempotent — uses IF NOT EXISTS)
+PGPASSWORD=postgres psql -U postgres -d fyp_security \
+    -f services/siem-service/db/schema.sql
+
+# Verify
+python3 -c "
+import psycopg2
+conn = psycopg2.connect(
+    host='localhost', port=5432,
+    dbname='fyp_security', user='postgres', password='postgres'
+)
+cur = conn.cursor()
+cur.execute('SELECT COUNT(*) FROM alerts')
+print('DB connected. Alerts:', cur.fetchone()[0])
+conn.close()
+"
+```
+
+---
+
+### Step 1.5 — Train ML Models
+
+```bash
+cd ~/iot-threat-detection   # or your project root
+
+# Step 1: Prepare and balance dataset
 python3 -m ml.training.dataset_preparer
 
 # Expected output:
@@ -70,10 +218,8 @@ python3 -m ml.training.dataset_preparer
 # Valid rows       : 14816
 # Malicious Ratio  : 0.50
 # [✔] Features built successfully: 14816 samples
-```
 
-```bash
-# Train models
+# Step 2: Train both models
 python3 -m ml.training.model_training
 
 # Expected output:
@@ -86,7 +232,8 @@ python3 -m ml.training.model_training
 # [✔] Models saved successfully
 ```
 
-**Verify models exist:**
+Verify:
+
 ```bash
 ls -la ml/training/models/
 # rf_model.pkl
@@ -94,312 +241,351 @@ ls -la ml/training/models/
 # preprocessor.pkl
 ```
 
+> If models are missing at startup, `start_pipeline.sh` auto-trains them (takes ~60s).
+
 ---
 
-### Step 1.2 — Install Dashboard Dependencies
+### Step 1.6 — Install Dashboard Dependencies
 
 ```bash
-cd ~/iot-threat-detection/dashboard
+cd dashboard
 npm install
 
-# Fix react-scripts if broken
+# If react-scripts symlink is broken:
 chmod +x node_modules/.bin/react-scripts
 ln -sf ../react-scripts/bin/react-scripts.js node_modules/.bin/react-scripts
+cd ..
 ```
 
 ---
 
-### Step 1.3 — Setup PostgreSQL Database
+### Step 1.7 — Configure Pi Capture Script
+
+SSH into the Pi (connect to IOT-LAB WiFi first):
 
 ```bash
-# Create database
-sudo -u postgres psql -c "CREATE DATABASE fyp_security;" 2>/dev/null || echo "Already exists"
+# Add route to IOT-LAB subnet on backend
+sudo ip route add 192.168.50.0/24 dev wlxe009bf6913de
 
-# Apply schema
-PGPASSWORD=postgres psql -U postgres -d fyp_security \
-    -f ~/iot-threat-detection/services/siem-service/db/schema.sql
-
-# Verify
-python3 -c "
-import psycopg2
-conn = psycopg2.connect(host='localhost', port=5432, dbname='fyp_security', user='postgres', password='postgres')
-cur = conn.cursor()
-cur.execute(\"SELECT COUNT(*) FROM alerts\")
-print('DB connected. Alerts:', cur.fetchone()[0])
-conn.close()
-"
-```
-
----
-
-### Step 1.4 — Configure Pi Capture Script
-
-SSH into Pi and update capture script:
-
-```bash
-# Connect to Pi (IOT-LAB WiFi must be connected first)
-sudo ip route add 192.168.50.0/24 dev wlxe009bf6913de  # add route if needed
+# SSH in
 ssh pi@192.168.50.1
 ```
 
-On Pi, verify/update `~/edge/capture/capture.sh`:
+On the Pi, verify `~/edge/capture/capture.sh`:
 
 ```bash
 cat ~/edge/capture/capture.sh
 ```
 
-It should contain:
+It should look like this (update BACKEND_IP to your backend's IOT-LAB IP):
+
 ```bash
 #!/bin/bash
-BACKEND_IP="192.168.50.21"   # PC's IOT-LAB IP (check with: ip addr show wlx...)
+# On backend: ip addr show wlxe009bf6913de | grep inet
+BACKEND_IP="192.168.50.21"     # ← backend's wlxe009bf6913de address
 BACKEND_PORT="9000"
 RECONNECT_DELAY="3"
 
 sudo tc qdisc del dev eth0 ingress 2>/dev/null || true
-sudo tc qdisc del dev wlan0 ingress 2>/dev/null || true
 sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
 
 echo "[CAPTURE] SPAN eth0 → $BACKEND_IP:$BACKEND_PORT"
 while true; do
     sudo tcpdump -i eth0 -B 4096 -s 0 -U -w - \
-        'host 192.168.10.101 or host 192.168.10.102 or host 192.168.10.130 or host 192.168.10.1' \
+        'host 192.168.50.10 or host 192.168.50.40 or host 192.168.2.101' \
         2>/dev/null | \
     socat - TCP:$BACKEND_IP:$BACKEND_PORT,retry=999,interval=3,keepalive,keepidle=10,keepintvl=5,keepcnt=3
     sleep "$RECONNECT_DELAY"
 done
 ```
 
-**Important:** Check PC's IOT-LAB IP:
-```bash
-# On PC (after connecting to IOT-LAB WiFi):
-ip addr show wlxe009bf6913de | grep "192.168.50"
-# Use that IP as BACKEND_IP in Pi's capture.sh
-```
+> The BPF filter (`host 192.168.50.10 or ...`) restricts the stream to monitored device traffic only.
+> Update the IPs in the filter to match your actual devices.
 
 ---
 
 ## PART 2 — NORMAL SESSION STARTUP
 
-### Step 2.1 — Connect IOT-LAB WiFi
-
-Connect PC to IOT-LAB WiFi network, then add route:
+### Step 2.1 — Connect IOT-LAB WiFi (Backend PC)
 
 ```bash
+# Connect to IOT-LAB WiFi via NetworkManager or manually
+# Then add route to reach Pi
 sudo ip route add 192.168.50.0/24 dev wlxe009bf6913de
-```
 
-Verify:
-```bash
+# Verify Pi reachable
 ping -c 2 192.168.50.1
-# Should get replies
 ```
 
 ---
 
-### Step 2.2 — Start Backend Pipeline
+### Step 2.2 — Find and Set Your NIC
+
+```bash
+# List all interfaces
+ip link show
+
+# Find the interface connected to the managed switch (wired)
+# Usually: eth0, ens3, enp3s0, eno1, etc.
+ip addr show eth0   # replace with your NIC name
+```
+
+Export it before starting:
+
+```bash
+export ZEEK_INTERFACE=eth0    # replace with your actual NIC
+```
+
+Or use the **NIC picker** in the System Control panel on the dashboard (it calls `GET /api/system/interfaces` and lets you select from a dropdown).
+
+---
+
+### Step 2.3 — Start Backend Pipeline
 
 ```bash
 cd ~/iot-threat-detection
-bash infrastructure/scripts/stop_pipeline.sh  # stop any existing
+
+# Stop any previous run
+bash infrastructure/scripts/stop_pipeline.sh
+
+# Start everything
+export ZEEK_INTERFACE=eth0     # ← your NIC
 bash infrastructure/scripts/start_pipeline.sh
 ```
 
-**Verify pipeline started:**
-```bash
-# Check all 7 threads launched
-tail -15 logs/pipeline/main_pipeline.log
-# Should see: [✔] All 7 threads launched
+What the startup script does (in order):
 
-# Check API is running
+| Step | Action |
+|------|--------|
+| 1 | Kernel buffer tuning (rmem_max, netdev_max_backlog) |
+| 1.5 | Reset SOAR firewall rules from any previous session |
+| 2 | Start PostgreSQL, create DB if missing, apply schema |
+| 3 | Kill any stale `zeek -i` process (pcap mode — Zeek managed by T2) |
+| 4 | Start Suricata (DPI engine) |
+| 5 | Init `ml/datasets/fp_dataset.csv` if missing |
+| 6 | Export all env vars (ZEEK_LOG_DIR, ZEEK_MODE, INTERNAL_TOKEN, etc.) |
+| 7.5 | Auto-train ML models if `rf_model.pkl` is missing |
+| 7 | Start FastAPI on :8000 |
+| 8 | Start main pipeline (7 threads) |
+
+Verify startup:
+
+```bash
+# API health
 curl -s http://localhost:8000/health
 # {"status":"ok"}
 
-# Check port 9000 listening
+# Pipeline threads launched
+tail -15 logs/pipeline/main_pipeline.log
+# [✔] All 7 threads launched
+
+# Port 9000 listening for Pi
 ss -tlnp | grep 9000
-# LISTEN 0.0.0.0:9000
+# LISTEN  0.0.0.0:9000
 ```
 
 ---
 
-### Step 2.3 — Start Dashboard
+### Step 2.4 — Start Dashboard
 
 ```bash
 cd ~/iot-threat-detection/dashboard
-node node_modules/react-scripts/bin/react-scripts.js start
+npm start
+# Or: node node_modules/react-scripts/bin/react-scripts.js start
 ```
 
-Open browser: `http://localhost:3000`
+Open `http://localhost:3000`
 
-**Verify dashboard:**
-- Header shows "OFFLINE" (Pi not connected yet)
-- Stats show current DB counts
-- No alerts in feed yet
+Verify:
+- Header shows **OFFLINE** (Pi not yet connected)
+- Stats bar shows current DB counts
+- System Control panel shows pipeline status
 
 ---
 
-### Step 2.4 — Start Pi Capture
+### Step 2.5 — Start Pi Capture Agent
 
-In a new terminal (IOT-LAB connected):
+In a new terminal:
 
 ```bash
 ssh pi@192.168.50.1
 bash ~/edge/capture/capture.sh
 ```
 
-**Verify Pi connected (on backend):**
+Verify on backend:
+
 ```bash
 tail -5 logs/pipeline/packet_listener.log
-# [+] Client connected: ('192.168.50.1', xxxxx)
+# [+] Client connected: ('192.168.50.x', xxxxx)
 # [+] Fresh pcap file ready: /tmp/live.pcap
 ```
 
-Dashboard should now show "LIVE" status.
+Dashboard header switches from **OFFLINE** → **LIVE**.
 
 ---
 
-### Step 2.5 — Start Kali Services
+### Step 2.6 — Start Kali Traffic Generation
 
-On Kali machine:
+On Kali Linux (testbed operator):
 
 ```bash
-# Terminal 1 — HTTP server (for BYOD traffic)
+# Terminal 1 — HTTP server (generates normal traffic)
 python3 -m http.server 8080
 
-# Terminal 2 — NC listener (for bulk traffic)
+# Terminal 2 — netcat listener
 nc -lvnp 4444
 
-# Terminal 3 — Camera stream
-python3 camera.py
+# Terminal 3 — camera simulation / attack scripts
+bash iot_camera_simulator.sh
 ```
 
 ---
 
-### Step 2.6 — Start Phone Traffic (Termux)
-
-On Android phone in Termux:
+### Step 2.7 — Verify Traffic Is Flowing
 
 ```bash
-bash master_traffic.sh
-```
-
----
-
-### Step 2.7 — Verify Traffic Flowing
-
-```bash
-# Check Zeek is processing traffic
+# Zeek processing pcap?
 tail -5 logs/pipeline/zeek_feeder.log
 # [+] Zeek finished on /tmp/live.pcap.snap
 
-# Check ML inference running
+# ML inference running?
 tail -5 logs/pipeline/ml_inference.log
-# [T3] ML inference worker started
+# [T4] ML inference worker running
 
-# Check alerts in DB
+# Recent alerts in DB?
 python3 -c "
 import psycopg2
-conn = psycopg2.connect(host='localhost', port=5432, dbname='fyp_security', user='postgres', password='postgres')
+conn = psycopg2.connect(
+    host='localhost', port=5432,
+    dbname='fyp_security', user='postgres', password='postgres'
+)
 cur = conn.cursor()
-cur.execute(\"SELECT src_ip, COUNT(*) FROM alerts WHERE timestamp > NOW() - INTERVAL '5 minutes' GROUP BY src_ip ORDER BY COUNT(*) DESC\")
+cur.execute(\"\"\"
+    SELECT src_ip, COUNT(*) as cnt
+    FROM alerts
+    WHERE timestamp > NOW() - INTERVAL '5 minutes'
+    GROUP BY src_ip
+    ORDER BY cnt DESC
+\"\"\")
 for r in cur.fetchall():
-    print(f'  {r[0]:20} : {r[1]} alerts')
+    print(f'  {str(r[0]):25} : {r[1]} alerts')
 conn.close()
 "
 ```
-
-Expected IPs: `192.168.10.101`, `192.168.10.102`, `192.168.10.130`, `192.168.10.1`
 
 ---
 
 ## PART 3 — ATTACK TESTING
 
-### Step 3.1 — Test Port Scan (Playbook 4)
+> Reset firewall before every test session: `bash infrastructure/scripts/reset_firewall.sh`
+
+### Test 1 — Port Scan → Playbook 4 (Scan Detection)
 
 On Kali:
+
 ```bash
-bash iot_camera_simulator.sh
-# Select: 1 (Fast Scan)
+nmap -sS -p 1-1000 192.168.50.10
+# Or: bash iot_camera_simulator.sh → option 1 (Fast Scan)
 ```
 
-**Verify on backend:**
+Verify:
+
 ```bash
 cat logs/soar/scan_detection.log
-# 2026-...T... | SCANNER=192.168.10.130 | UNIQUE_PORTS=20 | ACTION=THROTTLED
+# [SCAN_DETECTION] SCANNER=<kali_ip> | UNIQUE_PORTS=20+ | ACTION=THROTTLED
 ```
 
 ---
 
-### Step 3.2 — Test Camera Defense (Playbook 2)
+### Test 2 — Camera Flood → Playbook 2 (Camera Defense)
 
 On Kali:
+
 ```bash
-bash iot_camera_simulator.sh
-# Select: 10 (Burst Traffic) or 13 (Full Pipeline)
+sudo hping3 --flood 192.168.50.10
+# Or: bash iot_camera_simulator.sh → option 10 (Burst Traffic)
 ```
 
-**Verify:**
+Verify:
+
 ```bash
 cat logs/soar/camera_defense.log
-# 2026-...T... | ATTACKER=192.168.10.130 | TARGET=192.168.10.101 | SEVERITY=CRITICAL
+# [CAMERA_DEFENSE] ATTACKER=<kali_ip> | TARGET=192.168.50.10 | ACTION=RATE_LIMITED
 ```
 
 ---
 
-### Step 3.3 — Test Block Attacker (Playbook 1)
+### Test 3 — ICMP Flood → Playbook 1 (Block Attacker)
 
 On Kali:
+
 ```bash
-bash attack_simulator.sh
-# Select: 3 (ICMP Flood)
-# OR: sudo hping3 -1 --flood 192.168.10.101
+sudo hping3 -1 --flood 192.168.2.101
 ```
 
-Wait 60 seconds for 3+ CRITICAL events.
+Wait 60 seconds for 3+ CRITICAL events to accumulate.
 
-**Verify block applied:**
+Verify:
+
 ```bash
-sudo ufw status numbered | grep DENY
-# [ X] Anywhere  DENY IN  192.168.10.130
-
-cat logs/siem/soar_engine.log | grep "TRIGGER\|PB1\|BLOCKED"
-# [SOAR TRIGGER] src_ip=192.168.10.130 risk=0.8x
+# SOAR trigger logged
+grep "TRIGGER\|PB1\|BLOCKED" logs/siem/soar_engine.log | tail -5
+# [SOAR TRIGGER] src_ip=<kali_ip> risk=0.8x
 # [PB1] block_attacker → BLOCKED
+
+# UFW rule applied
+sudo ufw status numbered | grep DENY
+# [ X] Anywhere  DENY IN  <kali_ip>
 ```
 
 ---
 
-### Step 3.4 — Test BYOD Attack (Playbook 3)
+### Test 4 — SYN Flood from BYOD → Playbook 3 (Quarantine)
 
-On Kali:
+Simulate compromised BYOD (or from Kali spoofing BYOD IP):
+
 ```bash
-bash attack_simulator.sh
-# Select: 4 (SYN Flood) — target is 192.168.10.102
+sudo hping3 -S --flood -a 192.168.50.40 192.168.2.101
 ```
 
-**Verify quarantine:**
+Verify:
+
 ```bash
 cat logs/soar/quarantine.log
-# 2026-...T... | QUARANTINED=192.168.10.102 (Android BYOD) | RISK=0.85
+# [QUARANTINE] DEVICE=192.168.50.40 | RISK=0.85+ | ACTION=FORWARD_DROP
 
-sudo iptables -L FORWARD | grep 10.102
-# DROP  all  --  192.168.10.102  anywhere
+sudo iptables -L FORWARD -n | grep DROP
+# DROP  all  --  192.168.50.40  anywhere
 ```
 
 ---
 
-### Step 3.5 — Test Full Attack Pipeline
+### Test 5 — Full Attack Pipeline
 
-On Kali:
 ```bash
 bash attack_simulator.sh
 # Select: 13 (Run FULL Pipeline)
 ```
 
-Monitor dashboard in real-time — should see:
-- CRITICAL alerts flooding in
-- Toast notifications with QUARANTINE button
+Monitor dashboard in real time — expect:
+- CRITICAL alerts in live feed
+- Toast notifications
 - Top Attackers updating
-- Attack Timeline spikes
+- Attack Timeline ECG spikes
+- SOAR panel showing triggered playbooks
+
+---
+
+### Toggle Playbooks During Test
+
+From the dashboard **SOAR Panel**, click any playbook toggle to disable it live. Verify in:
+
+```bash
+cat logs/soar/playbook_flags.json
+# {"block_attacker": false, "camera_defense": true, ...}
+```
+
+The SOAR engine reads this file on every evaluation — no restart needed.
 
 ---
 
@@ -408,16 +594,18 @@ Monitor dashboard in real-time — should see:
 ### Check Pipeline Health
 
 ```bash
-# All 7 threads running?
-ps aux | grep main_pipeline | grep -v grep
+# All processes running?
+cat /tmp/iot_ids_pipeline.pid | xargs ps -p
+cat /tmp/iot_ids_api.pid | xargs ps -p
 
-# API responding?
+# API healthy?
 curl -s http://localhost:8000/health
+# {"status":"ok"}
 
-# WebSocket working?
-curl -s http://localhost:8000/api/alerts?limit=5 | python3 -m json.tool | head -20
+# All alert counts
+curl -s http://localhost:8000/api/alerts?limit=5 | python3 -m json.tool | head -30
 
-# Prometheus metrics?
+# Prometheus metrics
 curl -s http://localhost:9091/metrics | grep pipeline | head -5
 ```
 
@@ -436,9 +624,11 @@ print('RF  :', type(rf).__name__, '| estimators:', rf.n_estimators)
 print('ISO :', type(iso).__name__, '| estimators:', iso.n_estimators)
 print('PP  :', type(pp).__name__)
 print('Proto map:', pp.proto_map)
-print('Service map:', pp.service_map)
-print('ConnState map:', pp.conn_state_map)
+print('Service map (sample):', list(pp.service_map.items())[:5])
 "
+
+# Verify baseline_calibration.py present
+ls services/flow_service/core/baseline_calibration.py
 ```
 
 ---
@@ -448,7 +638,10 @@ print('ConnState map:', pp.conn_state_map)
 ```bash
 python3 -c "
 import psycopg2
-conn = psycopg2.connect(host='localhost', port=5432, dbname='fyp_security', user='postgres', password='postgres')
+conn = psycopg2.connect(
+    host='localhost', port=5432,
+    dbname='fyp_security', user='postgres', password='postgres'
+)
 cur = conn.cursor()
 
 cur.execute('SELECT COUNT(*) FROM alerts')
@@ -457,10 +650,16 @@ print('Total alerts:', cur.fetchone()[0])
 cur.execute('SELECT severity, COUNT(*) FROM alerts GROUP BY severity ORDER BY COUNT(*) DESC')
 print('By severity:', cur.fetchall())
 
-cur.execute('SELECT src_ip, COUNT(*), MAX(risk_score)::numeric(4,2) FROM alerts GROUP BY src_ip ORDER BY COUNT(*) DESC LIMIT 8')
+cur.execute(\"\"\"
+    SELECT src_ip, COUNT(*), ROUND(MAX(risk_score)::numeric, 2)
+    FROM alerts
+    GROUP BY src_ip
+    ORDER BY COUNT(*) DESC
+    LIMIT 8
+\"\"\")
 print('By IP:')
 for r in cur.fetchall():
-    print(f'  {r[0]:20} : {r[1]:5} alerts | max_risk={r[2]}')
+    print(f'  {str(r[0]):25} : {r[1]:5} alerts | max_risk={r[2]}')
 
 cur.execute(\"SELECT COUNT(*) FROM alerts WHERE timestamp > NOW() - INTERVAL '5 minutes'\")
 print('Last 5 min:', cur.fetchone()[0])
@@ -473,18 +672,21 @@ conn.close()
 ### Check SOAR Status
 
 ```bash
-# Engine log
-cat logs/siem/soar_engine.log | tail -20
+# Engine log (last 20 lines)
+tail -20 logs/siem/soar_engine.log
 
-# Playbook logs
-cat logs/soar/camera_defense.log 2>/dev/null || echo "No camera events"
-cat logs/soar/quarantine.log 2>/dev/null || echo "No quarantine events"
-cat logs/soar/scan_detection.log 2>/dev/null || echo "No scan events"
+# Individual playbook logs
+cat logs/soar/camera_defense.log  2>/dev/null || echo "No camera events"
+cat logs/soar/quarantine.log      2>/dev/null || echo "No quarantine events"
+cat logs/soar/scan_detection.log  2>/dev/null || echo "No scan events"
 
-# Active blocks
+# Runtime toggle state
+cat logs/soar/playbook_flags.json 2>/dev/null || echo "No flags file (all enabled by default)"
+
+# Active UFW blocks
 sudo ufw status numbered | grep DENY
 
-# Active quarantines
+# Active quarantine rules
 sudo iptables -L FORWARD -n | grep DROP
 ```
 
@@ -496,25 +698,27 @@ sudo iptables -L FORWARD -n | grep DROP
 # Is Pi connected?
 tail -5 logs/pipeline/packet_listener.log
 
-# Is pcap being written?
+# Is /tmp/live.pcap being written (check timestamp)?
 ls -la /tmp/live.pcap
-# Check timestamp — should be recent
 
-# Is Zeek processing?
+# Is Zeek processing it?
 tail -5 logs/pipeline/zeek_feeder.log
 
-# What IPs in conn.log?
+# What source IPs are in current conn.log?
 python3 -c "
 import subprocess
-r = subprocess.run(['grep', '-v', '^#', 'services/flow_service/logs/zeek/current/conn.log'], capture_output=True, text=True)
+r = subprocess.run(
+    ['grep', '-v', '^#', 'services/flow_service/logs/zeek/current/conn.log'],
+    capture_output=True, text=True
+)
 ips = {}
 for line in r.stdout.strip().split('\n'):
     parts = line.split('\t')
     if len(parts) >= 5:
         ips[parts[2]] = ips.get(parts[2], 0) + 1
 for ip, count in sorted(ips.items(), key=lambda x: -x[1])[:10]:
-    print(f'  {ip:25} : {count}')
-"
+    print(f'  {ip:25} : {count} flows')
+" 2>/dev/null || echo "conn.log not yet available"
 ```
 
 ---
@@ -522,28 +726,22 @@ for ip, count in sorted(ips.items(), key=lambda x: -x[1])[:10]:
 ### Check All Log Files
 
 ```bash
-# Pipeline logs
-ls -la logs/pipeline/
-tail -5 logs/pipeline/main_pipeline.log
-tail -5 logs/pipeline/packet_listener.log
-tail -5 logs/pipeline/zeek_feeder.log
-tail -5 logs/pipeline/zeek_parser.log
-tail -5 logs/pipeline/ml_inference.log
-tail -5 logs/pipeline/dpi_worker.log
+# Pipeline threads
+for f in main_pipeline packet_listener zeek_feeder zeek_parser ml_inference dpi_worker; do
+    echo "── $f ──"
+    tail -3 logs/pipeline/${f}.log 2>/dev/null || echo "  (no log yet)"
+done
 
-# Dashboard logs
-tail -5 logs/dashboard/api_service.log
-tail -5 logs/dashboard/uvicorn.log
+# Dashboard / API
+tail -5 logs/dashboard/api_service.log  2>/dev/null
+tail -5 logs/dashboard/uvicorn.log      2>/dev/null
 
-# SIEM logs
-tail -5 logs/siem/soar_engine.log
-tail -5 logs/siem/batch_writer.log 2>/dev/null
+# SIEM
+tail -5 logs/siem/soar_engine.log   2>/dev/null
+tail -5 logs/siem/batch_writer.log  2>/dev/null
 
-# SOAR playbook logs
-ls -la logs/soar/
-cat logs/soar/camera_defense.log 2>/dev/null
-cat logs/soar/quarantine.log 2>/dev/null
-cat logs/soar/scan_detection.log 2>/dev/null
+# SOAR playbooks
+ls -la logs/soar/ 2>/dev/null
 ```
 
 ---
@@ -554,22 +752,28 @@ cat logs/soar/scan_detection.log 2>/dev/null
 
 ```bash
 bash infrastructure/scripts/reset_firewall.sh
+```
 
-# Verify clean
-sudo ufw status numbered | grep DENY
-# Should be empty
-sudo iptables -L FORWARD -n | grep DROP
-# Should be empty
+This removes all UFW DENY rules and iptables FORWARD/INPUT rules added by SOAR playbooks.
+
+Verify clean state:
+
+```bash
+sudo ufw status numbered | grep -E "DENY|DROP" || echo "No block rules — clean"
+sudo iptables -L FORWARD -n | grep DROP            || echo "No quarantine rules — clean"
 ```
 
 ---
 
-### Clear Database (Fresh Start)
+### Clear Database
 
 ```bash
 python3 -c "
 import psycopg2
-conn = psycopg2.connect(host='localhost', port=5432, dbname='fyp_security', user='postgres', password='postgres')
+conn = psycopg2.connect(
+    host='localhost', port=5432,
+    dbname='fyp_security', user='postgres', password='postgres'
+)
 cur = conn.cursor()
 cur.execute('TRUNCATE TABLE alerts RESTART IDENTITY')
 conn.commit()
@@ -579,6 +783,8 @@ conn.close()
 "
 ```
 
+Or use the **Clear DB** button in the **System Control** panel on the dashboard.
+
 ---
 
 ### Stop Everything
@@ -586,11 +792,11 @@ conn.close()
 ```bash
 bash infrastructure/scripts/stop_pipeline.sh
 
-# Kill dashboard if running
+# Stop dashboard if running
 pkill -f "react-scripts" 2>/dev/null || true
 
 # Verify stopped
-ps aux | grep -E "main_pipeline|uvicorn|react" | grep -v grep
+ps aux | grep -E "main_pipeline|uvicorn|react-scripts" | grep -v grep
 ```
 
 ---
@@ -598,19 +804,20 @@ ps aux | grep -E "main_pipeline|uvicorn|react" | grep -v grep
 ### Clear Logs
 
 ```bash
-# Clear pipeline logs
-> logs/pipeline/main_pipeline.log
-> logs/pipeline/packet_listener.log
-> logs/pipeline/zeek_feeder.log
-> logs/pipeline/zeek_parser.log
-> logs/pipeline/ml_inference.log
-> logs/pipeline/dpi_worker.log
+for f in logs/pipeline/main_pipeline.log \
+          logs/pipeline/packet_listener.log \
+          logs/pipeline/zeek_feeder.log \
+          logs/pipeline/zeek_parser.log \
+          logs/pipeline/ml_inference.log \
+          logs/pipeline/dpi_worker.log \
+          logs/siem/soar_engine.log \
+          logs/siem/batch_writer.log; do
+    > "$f" 2>/dev/null
+done
 
-# Clear SOAR logs
-> logs/siem/soar_engine.log
-> logs/soar/camera_defense.log 2>/dev/null
-> logs/soar/quarantine.log 2>/dev/null
-> logs/soar/scan_detection.log 2>/dev/null
+> logs/soar/camera_defense.log  2>/dev/null
+> logs/soar/quarantine.log      2>/dev/null
+> logs/soar/scan_detection.log  2>/dev/null
 
 echo "Logs cleared"
 ```
@@ -622,19 +829,21 @@ echo "Logs cleared"
 ### Pi Not Connecting
 
 ```bash
-# Check Pi eth0 IP
+# Can backend reach Pi?
+ping -c 3 192.168.50.1
+# If fails: sudo ip route add 192.168.50.0/24 dev wlxe009bf6913de
+
+# Is Pi's eth0 up?
 ssh pi@192.168.50.1 "ip addr show eth0"
-# Should have 192.168.10.150 or similar
+# Should have 192.168.2.106 (or whatever you configured)
 
-# If no IP, set static:
-ssh pi@192.168.50.1 "sudo ip addr add 192.168.10.150/24 dev eth0"
+# Can Pi reach backend on port 9000?
+ssh pi@192.168.50.1 "nc -zv 192.168.50.21 9000"
+# If fails: check BACKEND_IP in capture.sh — should be backend's IOT-LAB IP
 
-# Check Pi can reach backend
-ssh pi@192.168.50.1 "ping -c 3 192.168.10.120"
-# If fails — SPAN port issue, check switch config
-
-# Check capture script running
-ssh pi@192.168.50.1 "ps aux | grep tcpdump"
+# Is port 9000 listening on backend?
+ss -tlnp | grep 9000
+# If not: pipeline isn't running — check logs/pipeline/packet_listener.log
 ```
 
 ---
@@ -642,24 +851,30 @@ ssh pi@192.168.50.1 "ps aux | grep tcpdump"
 ### No Alerts Generating
 
 ```bash
-# 1. Is Pi connected?
+# 1. Pi connected?
 tail -3 logs/pipeline/packet_listener.log
+# Expect: "[+] Client connected"
 
-# 2. Is Zeek running?
+# 2. Zeek processing?
 tail -3 logs/pipeline/zeek_feeder.log
+# Expect: "[+] Zeek finished on /tmp/live.pcap.snap"
 
-# 3. Is conn.log being written?
+# 3. conn.log being written?
 ls -la services/flow_service/logs/zeek/current/conn.log
 
-# 4. Are flows being parsed?
+# 4. Flows being parsed?
 tail -3 logs/pipeline/zeek_parser.log
 
-# 5. Is ML queue filling?
+# 5. ML queue filling?
 python3 -c "
 import sys; sys.path.insert(0,'.')
 from services.flow_service.state import ML_QUEUE
-print('ML Queue size:', len(ML_QUEUE))
+print('ML_QUEUE depth:', len(ML_QUEUE))
 "
+
+# 6. Is Zeek finding correct NIC?
+# Check ZEEK_INTERFACE was exported before start_pipeline.sh
+echo $ZEEK_INTERFACE
 ```
 
 ---
@@ -667,22 +882,38 @@ print('ML Queue size:', len(ML_QUEUE))
 ### SOAR Not Triggering
 
 ```bash
-# Check threshold — need risk >= 0.80 AND 3+ events in 60s
-grep "RISK_THRESHOLD" services/soar-service/engine/soar_engine.py
+# Check threshold config
+python3 -c "
+import json
+with open('shared/config/thresholds.json') as f:
+    print(json.load(f))
+"
+# SOAR triggers at risk >= 0.80, 3+ events in 60s
 
 # Check recent high-risk alerts
 python3 -c "
 import psycopg2
-conn = psycopg2.connect(host='localhost', port=5432, dbname='fyp_security', user='postgres', password='postgres')
+conn = psycopg2.connect(
+    host='localhost', port=5432,
+    dbname='fyp_security', user='postgres', password='postgres'
+)
 cur = conn.cursor()
-cur.execute(\"SELECT src_ip, risk_score, severity, timestamp FROM alerts WHERE risk_score >= 0.80 ORDER BY timestamp DESC LIMIT 10\")
-for r in cur.fetchall():
-    print(r)
+cur.execute(\"\"\"
+    SELECT src_ip, risk_score, severity, timestamp
+    FROM alerts
+    WHERE risk_score >= 0.80
+    ORDER BY timestamp DESC
+    LIMIT 10
+\"\"\")
+for r in cur.fetchall(): print(r)
 conn.close()
 "
 
-# Check SOAR engine loaded correctly
-tail -5 logs/pipeline/main_pipeline.log | grep -i soar
+# Check playbook flags — maybe a playbook was disabled
+cat logs/soar/playbook_flags.json 2>/dev/null
+
+# Check SOAR engine log
+tail -20 logs/siem/soar_engine.log
 ```
 
 ---
@@ -690,17 +921,50 @@ tail -5 logs/pipeline/main_pipeline.log | grep -i soar
 ### Dashboard Not Loading
 
 ```bash
-# Check react-scripts
-ls -la dashboard/node_modules/.bin/react-scripts
-# Should be symlink, not empty file
-
-# Fix if empty:
-ln -sf ../react-scripts/bin/react-scripts.js dashboard/node_modules/.bin/react-scripts
-chmod +x dashboard/node_modules/react-scripts/bin/react-scripts.js
-
-# Check API
+# Check API is running
 curl -s http://localhost:8000/health
-# If fails — restart pipeline
+
+# Check dashboard .env
+cat dashboard/.env
+# REACT_APP_API_URL should match your backend IP
+
+# react-scripts symlink broken?
+ls -la dashboard/node_modules/.bin/react-scripts
+# If it's empty or missing:
+cd dashboard
+ln -sf ../react-scripts/bin/react-scripts.js node_modules/.bin/react-scripts
+chmod +x node_modules/react-scripts/bin/react-scripts.js
+cd ..
+```
+
+---
+
+### WebSocket Not Live (Dashboard Shows OFFLINE)
+
+```bash
+# Test WebSocket endpoint
+curl -s http://localhost:8000/api/alerts?limit=3
+
+# Check uvicorn log for WS connection errors
+tail -20 logs/dashboard/uvicorn.log
+
+# Verify REACT_APP_WS_URL in dashboard/.env
+# Should be: ws://192.168.2.101:8000/ws  (use actual backend IP, not localhost if remote)
+```
+
+---
+
+### ML Models Missing
+
+```bash
+ls ml/training/models/
+# If rf_model.pkl, iso_model.pkl, or preprocessor.pkl missing:
+
+source venv/bin/activate
+python3 -m ml.training.dataset_preparer
+python3 -m ml.training.model_training
+
+# Or just restart the pipeline — start_pipeline.sh auto-trains at step 7.5
 ```
 
 ---
@@ -708,7 +972,7 @@ curl -s http://localhost:8000/health
 ### Database Connection Error
 
 ```bash
-# Check PostgreSQL running
+# Is PostgreSQL running?
 sudo systemctl status postgresql
 
 # Start if stopped
@@ -716,26 +980,65 @@ sudo systemctl start postgresql
 
 # Test connection
 PGPASSWORD=postgres psql -U postgres -d fyp_security -c "SELECT 1"
+
+# If database doesn't exist
+sudo -u postgres psql -c "CREATE DATABASE fyp_security;"
+PGPASSWORD=postgres psql -U postgres -d fyp_security \
+    -f services/siem-service/db/schema.sql
+```
+
+---
+
+### Baseline Calibration — Too Aggressive (Missing Attacks)
+
+If the baseline calibration layer is dampening real attack traffic:
+
+```bash
+# Check the calibration file
+cat services/flow_service/core/baseline_calibration.py
+
+# The calibration only dampens on normal flow shapes:
+# - connection state: SF (normal finish)
+# - duration: > 0.001s (not zero-duration)
+# - bytes: > 0 in both directions
+# Attack-shaped flows (S0, REJ, very short, zero bytes) are never dampened.
 ```
 
 ---
 
 ## PART 7 — QUICK REFERENCE
 
+### Key Commands
+
+| Task | Command |
+|------|---------|
+| Start everything | `export ZEEK_INTERFACE=eth0 && bash infrastructure/scripts/start_pipeline.sh` |
+| Stop everything | `bash infrastructure/scripts/stop_pipeline.sh` |
+| Reset firewall | `bash infrastructure/scripts/reset_firewall.sh` |
+| Check API health | `curl -s http://localhost:8000/health` |
+| Tail pipeline log | `tail -f logs/pipeline/main_pipeline.log` |
+| Tail SOAR log | `tail -f logs/siem/soar_engine.log` |
+| Clear DB (CLI) | see Part 5 Python snippet |
+| Retrain models | `python3 -m ml.training.model_training` |
+
+---
+
 ### Key File Locations
 
 | File | Purpose |
 |------|---------|
+| `shared/config/system_config.yaml` | All device IPs — single source of truth |
+| `shared/config/thresholds.json` | Risk thresholds + SOAR trigger config |
+| `shared/utils/config_loader.py` | Loads config for all services |
 | `ml/training/models/rf_model.pkl` | Random Forest model |
 | `ml/training/models/iso_model.pkl` | Isolation Forest model |
 | `ml/training/models/preprocessor.pkl` | Feature preprocessor |
-| `ml/datasets/balanced_dataset.csv` | Training dataset |
-| `services/flow_service/zeek_parser.py` | Zeek conn.log parser |
-| `services/flow_service/core/risk_scorer.py` | Risk scoring logic |
-| `services/soar-service/engine/soar_engine.py` | SOAR orchestrator |
-| `services/soar-service/rules/` | 4 playbook files |
-| `infrastructure/scripts/reset_firewall.sh` | Firewall reset |
-| `infrastructure/scripts/start_pipeline.sh` | Pipeline startup |
+| `ml/datasets/fp_dataset.csv` | FP feedback export (analyst-confirmed false positives) |
+| `services/flow_service/core/baseline_calibration.py` | IoT FP reduction layer |
+| `infrastructure/scripts/start_pipeline.sh` | Master startup (only way to start) |
+| `infrastructure/scripts/reset_firewall.sh` | Remove all SOAR firewall rules |
+| `logs/soar/playbook_flags.json` | Runtime playbook enable/disable state |
+| `dashboard/.env` | Dashboard backend URL config |
 
 ---
 
@@ -745,89 +1048,79 @@ PGPASSWORD=postgres psql -U postgres -d fyp_security -c "SELECT 1"
 |------|---------|
 | 3000 | React Dashboard |
 | 8000 | FastAPI (REST + WebSocket) |
-| 9000 | Pi PCAP stream receiver |
+| 9000 | Pi PCAP TCP stream receiver |
 | 9091 | Prometheus metrics |
 | 5432 | PostgreSQL |
 
 ---
 
-### Device IP Map
+### Severity → Action Mapping
 
-| IP | Device | Role |
-|----|--------|------|
-| 192.168.10.1 | Router | Gateway |
-| 192.168.10.101 | IP Camera | IoT Device |
-| 192.168.10.102 | Android BYOD | IoT Device |
-| 192.168.10.120 | Backend PC | Detection Engine |
-| 192.168.10.130 | Kali Linux | Attacker |
-| 192.168.10.150 | Pi (eth0) | Capture Node |
-| 192.168.50.1 | Pi (wlan0) | IOT-LAB AP |
-
----
-
-### Severity Thresholds
-
-| Severity | Risk Score | Action |
-|----------|-----------|--------|
-| CRITICAL | ≥ 0.80 | SOAR trigger |
-| HIGH | ≥ 0.60 | Alert + Toast |
-| MEDIUM | ≥ 0.35 | Alert |
+| Severity | Risk Score | Auto Action |
+|----------|-----------|-------------|
+| CRITICAL | ≥ 0.80 | SOAR playbook eligible (if 3+ events in 60s) |
+| HIGH | ≥ 0.60 | Alert + toast notification |
+| MEDIUM | ≥ 0.35 | Alert logged + dashboard |
 | LOW | < 0.35 | Log only |
 
 ---
 
-### SOAR Playbook Summary
+### SOAR Playbook Reference
 
-| Playbook | Trigger | Action | Log |
-|----------|---------|--------|-----|
-| block_attacker | CRITICAL from external | UFW DENY rule | soar_engine.log |
-| camera_defense | Attack on 10.101 | iptables rate limit | soar/camera_defense.log |
-| quarantine_device | CRITICAL from IoT | iptables FORWARD DROP | soar/quarantine.log |
-| scan_detection | 20+ ports in 30s | iptables throttle | soar/scan_detection.log |
+| Playbook | Trigger Condition | Firewall Action | Revert |
+|----------|-------------------|-----------------|--------|
+| `block_attacker` | CRITICAL from external IP | `ufw deny from <ip>` | Dashboard UNBLOCK button |
+| `camera_defense` | Any attack targeting camera IP | `iptables` rate-limit | `reset_firewall.sh` |
+| `quarantine_device` | CRITICAL sourced from IoT device | `iptables FORWARD DROP` | Dashboard RELEASE button |
+| `scan_detection` | 20+ unique ports in 30s | `iptables` throttle | `reset_firewall.sh` |
+
+All playbooks can be toggled on/off live from the dashboard SOAR Panel.
 
 ---
 
-## PART 8 — COMPLETE SESSION CHECKLIST
+## PART 8 — SESSION CHECKLIST
 
 ```
 PRE-SESSION:
-[ ] IOT-LAB WiFi connected on PC
+[ ] shared/config/system_config.yaml — IPs are correct
+[ ] dashboard/.env — REACT_APP_API_URL and WS_URL are correct
+[ ] IOT-LAB WiFi connected on backend PC
 [ ] sudo ip route add 192.168.50.0/24 dev wlxe009bf6913de
-[ ] Pi reachable: ping 192.168.50.1
+[ ] ping 192.168.50.1 — Pi reachable
 
 STARTUP:
-[ ] bash infrastructure/scripts/stop_pipeline.sh
+[ ] bash infrastructure/scripts/stop_pipeline.sh     (clear any previous run)
+[ ] bash infrastructure/scripts/reset_firewall.sh    (clean firewall state)
+[ ] export ZEEK_INTERFACE=<your_nic>
 [ ] bash infrastructure/scripts/start_pipeline.sh
-[ ] curl http://localhost:8000/health → {"status":"ok"}
-[ ] node node_modules/react-scripts/bin/react-scripts.js start
-[ ] ssh pi@192.168.50.1 && bash ~/edge/capture/capture.sh
-[ ] tail logs/pipeline/packet_listener.log → "Client connected"
-[ ] Dashboard shows "LIVE"
+[ ] curl http://localhost:8000/health  →  {"status":"ok"}
+[ ] tail logs/pipeline/main_pipeline.log  →  "[✔] All 7 threads launched"
+[ ] ss -tlnp | grep 9000  →  LISTEN
+[ ] cd dashboard && npm start
 
-KALI SERVICES:
-[ ] python3 -m http.server 8080
-[ ] nc -lvnp 4444
-[ ] python3 camera.py
+PI:
+[ ] ssh pi@192.168.50.1
+[ ] bash ~/edge/capture/capture.sh
+[ ] tail logs/pipeline/packet_listener.log  →  "Client connected"
+[ ] Dashboard header  →  LIVE
 
-PHONE:
-[ ] bash master_traffic.sh
-
-VERIFY TRAFFIC:
-[ ] Dashboard shows 10.101, 10.102, 10.130 in Connected Devices
+TRAFFIC VERIFICATION:
+[ ] tail logs/pipeline/zeek_feeder.log  →  "Zeek finished"
 [ ] Alerts appearing in Live Alert Feed
+[ ] Devices Panel shows camera + BYOD
 
 ATTACK TEST:
-[ ] bash attack_simulator.sh → Option 3 (ICMP Flood)
-[ ] Wait 60s → SOAR trigger
-[ ] sudo ufw status | grep DENY → Kali blocked
-[ ] cat logs/soar/quarantine.log → BYOD quarantined
+[ ] bash infrastructure/scripts/reset_firewall.sh
+[ ] Run attack (hping3 / nmap)
+[ ] Wait 60s → SOAR trigger in logs/siem/soar_engine.log
+[ ] Verify firewall rule: sudo ufw status | grep DENY
 
 POST-SESSION:
 [ ] bash infrastructure/scripts/reset_firewall.sh
-[ ] sudo ufw status | grep DENY → empty
 [ ] bash infrastructure/scripts/stop_pipeline.sh
+[ ] Verify: ps aux | grep -E "main_pipeline|uvicorn" | grep -v grep  →  nothing
 ```
 
 ---
 
-*IoT IDS FYP — Phase 7 | Complete Runbook*
+*IoT IDS FYP — Operations Runbook | Last updated: August 2026*
