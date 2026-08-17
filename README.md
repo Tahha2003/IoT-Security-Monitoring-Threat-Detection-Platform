@@ -10,7 +10,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](LICENSE)
 
-**Final Year Project — BSc Computer Science / Cybersecurity**
+**Final Year Project — BS Software Engineering / Cybersecurity**
 
 *"Because in the age of AI, every business is a target — and cloud-based security is no longer enough."*
 
