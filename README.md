@@ -99,48 +99,9 @@ PostgreSQL SIEM Storage + WebSocket → React Dashboard
 
 ## 🏗️ System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         IoT TESTBED NETWORK                                 │
-│                                                                              │
-│   [WiFi Camera]──WiFi──┐                                                    │
-│   [BYOD Mobile]──WiFi──┤──[WiFi Router]──[Managed Switch]──[Backend PC]    │
-│                         │                       │                            │
-│   [Raspberry Pi]────────┘ (Ethernet)    [Kali Linux] (Ethernet)             │
-│                                                 │                            │
-│                                         SPAN Port Mirror                    │
-│                                                 ▼                            │
-│                               [Raspberry Pi — SPAN destination]             │
-│                               tcpdump | socat → TCP stream → Backend:9000   │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-              ┌─────────────────────┼─────────────────────┐
-              ▼                     ▼                       ▼
-    ┌──────────────────┐  ┌─────────────────┐  ┌──────────────────────┐
-    │  T1 Packet       │  │  T2/T3 Zeek     │  │  T4 ML Inference     │
-    │  Listener :9000  │  │  Feeder+Parser  │  │  RF + ISO Forest +   │
-    │  (PCAP ingest)   │  │  (38 features)  │  │  Baseline Calibration│
-    └──────────────────┘  └─────────────────┘  └──────────────────────┘
-              │                     │                       │
-              └─────────────────────┼─────────────────────┘
-                                    │
-              ┌─────────────────────┼─────────────────────┐
-              ▼                     ▼                       ▼
-    ┌──────────────────┐  ┌─────────────────┐  ┌──────────────────────┐
-    │  T5 DPI Worker   │  │  T6 SIEM Batch  │  │  T7 Metrics Worker   │
-    │  (Suricata —     │  │  Writer         │  │  (Prometheus :9091)  │
-    │   ML-flagged     │  │  (PostgreSQL)   │  │                      │
-    │   flows only)    │  │                 │  │                      │
-    └──────────────────┘  └─────────────────┘  └──────────────────────┘
-                                    │
-              ┌─────────────────────┼─────────────────────┐
-              ▼                     ▼                       ▼
-    ┌──────────────────┐  ┌─────────────────┐  ┌──────────────────────┐
-    │  SOAR Engine     │  │  FastAPI         │  │  React Dashboard     │
-    │  4 Playbooks     │  │  REST + WS       │  │  Live + Historical   │
-    │  UFW + iptables  │  │  :8000           │  │  :3000               │
-    └──────────────────┘  └─────────────────┘  └──────────────────────┘
-```
+![System Architecture Diagram](docs/diagrams/System%20Architecture%20Diagram.png)
+
+> 📁 See [`docs/diagrams/`](docs/diagrams/README.md) for all architecture diagrams with detailed descriptions.
 
 
 ---
@@ -253,28 +214,9 @@ Disk:  20 GB free
 
 ## 🌐 Network Topology
 
-![IoT Network Architecture](docs/diagrams/Project%20Diagram.jpeg)
+![IoT Network Architecture Overview](docs/diagrams/Project%20Diagram.jpeg)
 
-```
-                    WiFi Router
-                    192.168.50.0/24
-                         │
-            ┌────────────┼────────────┐
-            │                         │
-    WiFi Camera                  BYOD Mobile
-    192.168.50.10                192.168.50.40
-    (IoT Device)                 (IoT Device)
-            │
-      Managed Switch
-      (SPAN configured)
-      ├── Port A ── Raspberry Pi   192.168.2.106  ← SPAN destination
-      ├── Port B ── Backend PC     192.168.2.101  ← source (mirrored)
-      ├── Port C ── WiFi Router    (uplink)        ← source (mirrored)
-      └── Port D ── Kali Linux     (192.168.2.x)  ← source (testbed operator)
-
-IOT-LAB WiFi (Pi wlan0 / PC wlxe009bf6913de)
-    └── Used for SSH access to Pi and BACKEND_IP route
-```
+![IoT Network Architecture Detailed](docs/diagrams/IoT%20Network%20Architecture.png)
 
 | Component | Role |
 |-----------|------|
